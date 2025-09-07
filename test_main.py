@@ -159,6 +159,120 @@ class TestVibebusChat(unittest.TestCase):
         
         # Should remain unchanged
         self.assertEqual(chat.conversation, original_conversation)
+    
+    def test_format_weather_response_success(self):
+        """Test format_weather_response with valid weather data"""
+        weather_data = {
+            'current': {
+                'temperature_2m': 15.2,
+                'wind_speed_10m': 3.5,
+                'precipitation': 0.0
+            },
+            'daily': {
+                'temperature_2m_max': [18.5],
+                'temperature_2m_min': [12.0]
+            }
+        }
+        
+        result = self.chat.format_weather_response(weather_data)
+        
+        self.assertIn("🌤️ Current Weather in Helsinki:", result)
+        self.assertIn("Temperature: 15.2°C", result)
+        self.assertIn("Wind Speed: 3.5 m/s", result)
+        self.assertIn("Precipitation: 0.0 mm", result)
+        self.assertIn("Today's Range: 12.0°C - 18.5°C", result)
+    
+    def test_format_weather_response_with_error(self):
+        """Test format_weather_response when error is present in data"""
+        weather_data = {"error": "Weather API error: Connection failed"}
+        
+        expected_response = "Sorry, I couldn't get the weather information: Weather API error: Connection failed"
+        
+        result = self.chat.format_weather_response(weather_data)
+        self.assertEqual(result, expected_response)
+    
+    def test_format_time_response_success(self):
+        """Test format_time_response with valid time data"""
+        time_data = {
+            'current_time': '14:35:22',
+            'current_date': '2025-01-09',
+            'weekday': 'Thursday',
+            'timezone': 'Europe/Helsinki'
+        }
+        
+        expected_response = (
+            "🕐 Current Time in Helsinki:\n"
+            "Time: 14:35:22\n"
+            "Date: 2025-01-09\n"
+            "Day: Thursday\n"
+            "Timezone: Europe/Helsinki"
+        )
+        
+        result = self.chat.format_time_response(time_data)
+        self.assertEqual(result, expected_response)
+    
+    def test_format_time_response_with_error(self):
+        """Test format_time_response when error is present in data"""
+        time_data = {"error": "Time API error: Connection failed"}
+        
+        expected_response = "Sorry, I couldn't get the current time: Time API error: Connection failed"
+        
+        result = self.chat.format_time_response(time_data)
+        self.assertEqual(result, expected_response)
+    
+    def test_format_bus_response_success(self):
+        """Test format_bus_response with valid bus data"""
+        bus_data = {
+            'data': {
+                'stop': {
+                    'name': 'Test Bus Stop',
+                    'stoptimesWithoutPatterns': [
+                        {
+                            'realtimeDeparture': 54000,  # 15:00 in seconds since midnight
+                            'serviceDay': 1641859200,    # Mock service day
+                            'realtime': True,
+                            'headsign': 'Central Station',
+                            'trip': {
+                                'route': {
+                                    'shortName': '55'
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        
+        result = self.chat.format_bus_response(bus_data, "HSL:1234")
+        
+        self.assertIn("🚌 Next Departures from Test Bus Stop:", result)
+        self.assertIn("Bus 55 → Central Station", result)
+        self.assertIn("🟢", result)  # Realtime indicator
+    
+    def test_format_bus_response_with_error(self):
+        """Test format_bus_response when error is present in data"""
+        bus_data = {"error": "Bus API error: Connection failed"}
+        
+        expected_response = "Sorry, I couldn't get the bus departure information: Bus API error: Connection failed"
+        
+        result = self.chat.format_bus_response(bus_data, "HSL:1234")
+        self.assertEqual(result, expected_response)
+    
+    def test_format_bus_response_no_departures(self):
+        """Test format_bus_response when no departures are found"""
+        bus_data = {
+            'data': {
+                'stop': {
+                    'name': 'Empty Bus Stop',
+                    'stoptimesWithoutPatterns': []
+                }
+            }
+        }
+        
+        expected_response = "🚌 No upcoming departures found for Empty Bus Stop"
+        
+        result = self.chat.format_bus_response(bus_data, "HSL:1234")
+        self.assertEqual(result, expected_response)
 
 
 if __name__ == '__main__':

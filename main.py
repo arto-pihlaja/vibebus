@@ -17,7 +17,7 @@ import requests
 load_dotenv()
 
 class VibebusChat:
-    def __init__(self, model: str = None, conversation_max_length: int = 20):
+    def __init__(self, model: str = None, conversation_max_length: int = 100):
         """Initialize the chat agent with OpenRouter client"""
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
@@ -173,6 +173,112 @@ class VibebusChat:
             }
         except Exception as e:
             return {"error": f"Time error: {str(e)}"}
+    
+    def format_weather_response(self, weather_data: dict) -> str:
+        """Format weather data into a readable response"""
+        if "error" in weather_data:
+            return f"Sorry, I couldn't get the weather information: {weather_data['error']}"
+        
+        try:
+            current = weather_data.get('current', {})
+            daily = weather_data.get('daily', {})
+            
+            temp = current.get('temperature_2m', 'N/A')
+            wind = current.get('wind_speed_10m', 'N/A')
+            precipitation = current.get('precipitation', 'N/A')
+            
+            response = f"🌤️ Current Weather in Helsinki:\n"
+            response += f"Temperature: {temp}°C\n"
+            response += f"Wind Speed: {wind} m/s\n"
+            response += f"Precipitation: {precipitation} mm\n"
+            
+            if daily and 'temperature_2m_max' in daily and daily['temperature_2m_max']:
+                max_temp = daily['temperature_2m_max'][0] if daily['temperature_2m_max'] else 'N/A'
+                min_temp = daily['temperature_2m_min'][0] if daily['temperature_2m_min'] else 'N/A'
+                response += f"Today's Range: {min_temp}°C - {max_temp}°C"
+            
+            return response
+            
+        except (KeyError, IndexError, TypeError) as e:
+            return f"Sorry, I couldn't parse the weather data properly: {str(e)}"
+    
+    def format_bus_response(self, bus_data: dict, stop_id: str) -> str:
+        """Format bus departure data into a readable response"""
+        if "error" in bus_data:
+            return f"Sorry, I couldn't get the bus departure information: {bus_data['error']}"
+        
+        try:
+            data = bus_data.get('data', {})
+            stop = data.get('stop', {})
+            stop_name = stop.get('name', f'Stop {stop_id}')
+            departures = stop.get('stoptimesWithoutPatterns', [])
+            
+            if not departures:
+                return f"🚌 No upcoming departures found for {stop_name}"
+            
+            response = f"🚌 Next Departures from {stop_name}:\n\n"
+            
+            # Sort by departure time and take first 5
+            sorted_departures = sorted(departures, key=lambda x: x.get('realtimeDeparture', x.get('scheduledDeparture', 0)))[:5]
+            
+            for departure in sorted_departures:
+                route = departure.get('trip', {}).get('route', {})
+                bus_number = route.get('shortName', 'N/A')
+                headsign = departure.get('headsign', 'Unknown destination')
+                
+                # Use realtime departure if available, otherwise scheduled
+                departure_time = departure.get('realtimeDeparture') or departure.get('scheduledDeparture', 0)
+                service_day = departure.get('serviceDay', 0)
+                
+                # Convert service day + departure time to actual time
+                # serviceDay is midnight of the day in seconds since epoch
+                # departure time is seconds since midnight
+                actual_time = service_day + departure_time
+                
+                # Convert to Helsinki time format
+                import datetime
+                import zoneinfo
+                
+                # Create datetime object in UTC first, then convert to Helsinki timezone
+                dt_utc = datetime.datetime.fromtimestamp(actual_time, tz=datetime.timezone.utc)
+                dt_helsinki = dt_utc.astimezone(zoneinfo.ZoneInfo("Europe/Helsinki"))
+                time_str = dt_helsinki.strftime("%H:%M")
+                
+                # Show if it's realtime or scheduled
+                realtime_indicator = "🟢" if departure.get('realtime') else "🔵"
+                
+                response += f"{realtime_indicator} Bus {bus_number} → {headsign} at {time_str}\n"
+            
+            return response.strip()
+            
+        except (KeyError, IndexError, TypeError) as e:
+            return f"Sorry, I couldn't parse the bus departure data properly: {str(e)}"
+    
+    def format_time_response(self, time_data: dict) -> str:
+        """Format current time data into a readable response"""
+        try:
+            if "error" in time_data:
+                return f"Sorry, I couldn't get the current time: {time_data['error']}"
+        except (TypeError, AttributeError):
+            # time_data is not a dict or doesn't support 'in' operator
+            pass
+        
+        try:
+            current_time = time_data.get('current_time', 'N/A')
+            current_date = time_data.get('current_date', 'N/A')
+            weekday = time_data.get('weekday', 'N/A')
+            timezone = time_data.get('timezone', 'N/A')
+            
+            response = f"🕐 Current Time in Helsinki:\n"
+            response += f"Time: {current_time}\n"
+            response += f"Date: {current_date}\n"
+            response += f"Day: {weekday}\n"
+            response += f"Timezone: {timezone}"
+            
+            return response
+            
+        except (KeyError, TypeError, AttributeError) as e:
+            return f"Sorry, I couldn't parse the time data properly: {str(e)}"
     
     def _trim_conversation(self):
         """Trim conversation to max length, preserving system message"""
