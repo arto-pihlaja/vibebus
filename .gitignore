@@ -116,3 +116,13 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Project specific
+.vscode/
+.idea/
+.cursorrules/
+.cursor/
+.cursor/
+.claude/
+CLAUDE.md
+docs/
