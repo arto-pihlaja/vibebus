@@ -69,6 +69,96 @@ class TestVibebusChat(unittest.TestCase):
         
         for name in expected_names:
             self.assertIn(name, tool_names)
+    
+    def test_conversation_max_length_default(self):
+        """Test that conversationMaxLength has correct default value"""
+        self.assertEqual(self.chat.conversationMaxLength, 100)
+    
+    def test_conversation_max_length_custom(self):
+        """Test that conversationMaxLength can be set to custom value"""
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY': 'test_key'}):
+            chat = VibebusChat(conversation_max_length=50)
+            self.assertEqual(chat.conversationMaxLength, 50)
+    
+    def test_trim_conversation_no_trim_needed(self):
+        """Test _trim_conversation when no trimming is needed"""
+        # Add a few messages below the max length
+        self.chat.conversation = [
+            {"role": "system", "content": "System message"},
+            {"role": "user", "content": "User message 1"},
+            {"role": "assistant", "content": "Assistant message 1"}
+        ]
+        
+        original_length = len(self.chat.conversation)
+        self.chat._trim_conversation()
+        
+        # Should remain unchanged
+        self.assertEqual(len(self.chat.conversation), original_length)
+        self.assertEqual(self.chat.conversation[0]["role"], "system")
+    
+    def test_trim_conversation_with_system_message(self):
+        """Test _trim_conversation preserves system message"""
+        # Set small max length for testing
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY': 'test_key'}):
+            chat = VibebusChat(conversation_max_length=3)
+        
+        # Add more messages than max length
+        chat.conversation = [
+            {"role": "system", "content": "System message"},
+            {"role": "user", "content": "User message 1"},
+            {"role": "assistant", "content": "Assistant message 1"},
+            {"role": "user", "content": "User message 2"},
+            {"role": "assistant", "content": "Assistant message 2"}
+        ]
+        
+        chat._trim_conversation()
+        
+        # Should keep system message + last 2 messages
+        self.assertEqual(len(chat.conversation), 3)
+        self.assertEqual(chat.conversation[0]["role"], "system")
+        self.assertEqual(chat.conversation[0]["content"], "System message")
+        self.assertEqual(chat.conversation[1]["content"], "User message 2")
+        self.assertEqual(chat.conversation[2]["content"], "Assistant message 2")
+    
+    def test_trim_conversation_without_system_message(self):
+        """Test _trim_conversation when no system message exists"""
+        # Set small max length for testing
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY': 'test_key'}):
+            chat = VibebusChat(conversation_max_length=2)
+        
+        # Add messages without system message
+        chat.conversation = [
+            {"role": "user", "content": "User message 1"},
+            {"role": "assistant", "content": "Assistant message 1"},
+            {"role": "user", "content": "User message 2"},
+            {"role": "assistant", "content": "Assistant message 2"}
+        ]
+        
+        chat._trim_conversation()
+        
+        # Should keep last 2 messages
+        self.assertEqual(len(chat.conversation), 2)
+        self.assertEqual(chat.conversation[0]["content"], "User message 2")
+        self.assertEqual(chat.conversation[1]["content"], "Assistant message 2")
+    
+    def test_trim_conversation_exactly_at_limit(self):
+        """Test _trim_conversation when conversation is exactly at limit"""
+        # Set max length for testing
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY': 'test_key'}):
+            chat = VibebusChat(conversation_max_length=3)
+        
+        # Add exactly max length messages
+        chat.conversation = [
+            {"role": "system", "content": "System message"},
+            {"role": "user", "content": "User message"},
+            {"role": "assistant", "content": "Assistant message"}
+        ]
+        
+        original_conversation = chat.conversation.copy()
+        chat._trim_conversation()
+        
+        # Should remain unchanged
+        self.assertEqual(chat.conversation, original_conversation)
 
 
 if __name__ == '__main__':

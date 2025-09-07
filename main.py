@@ -17,7 +17,7 @@ import requests
 load_dotenv()
 
 class VibebusChat:
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, conversation_max_length: int = 20):
         """Initialize the chat agent with OpenRouter client"""
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
@@ -30,6 +30,7 @@ class VibebusChat:
         
         self.model = model or os.getenv("DEFAULT_MODEL", "openai/gpt-4o")
         self.conversation: List[Dict[str, str]] = []
+        self.conversationMaxLength = conversation_max_length
         
         # Define available tools for the model
         self.tools = [
@@ -173,11 +174,27 @@ class VibebusChat:
         except Exception as e:
             return {"error": f"Time error: {str(e)}"}
     
+    def _trim_conversation(self):
+        """Trim conversation to max length, preserving system message"""
+        if len(self.conversation) <= self.conversationMaxLength:
+            return
+        
+        # Keep system message (first message) and remove oldest user/assistant messages
+        system_message = self.conversation[0] if self.conversation and self.conversation[0]["role"] == "system" else None
+        messages_to_keep = self.conversation[-(self.conversationMaxLength - (1 if system_message else 0)):]
+        
+        if system_message:
+            self.conversation = [system_message] + messages_to_keep
+        else:
+            self.conversation = messages_to_keep
     
     def send_message(self, message: str) -> str:
         """Send a message to the LLM and return the response"""
         # Add user message to conversation history
         self.conversation.append({"role": "user", "content": message})
+        
+        # Trim conversation if it exceeds max length
+        self._trim_conversation()
         
         try:
             # Initial completion with tools
@@ -235,11 +252,18 @@ class VibebusChat:
                 # Add final response to conversation
                 self.conversation.append({"role": "assistant", "content": final_response})
                 
+                # Trim conversation if it exceeds max length
+                self._trim_conversation()
+                
                 return final_response
             else:
                 # No tool calls needed, return direct response
                 response = response_message.content
                 self.conversation.append({"role": "assistant", "content": response})
+                
+                # Trim conversation if it exceeds max length
+                self._trim_conversation()
+                
                 return response
                 
         except Exception as e:
