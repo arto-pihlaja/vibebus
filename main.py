@@ -31,6 +31,7 @@ class VibebusChat:
         self.model = model or os.getenv("DEFAULT_MODEL", "openai/gpt-4o")
         self.conversation: List[Dict[str, str]] = []
         self.conversationMaxLength = conversation_max_length
+        self.last_stop_search_results = []  # Store last search results for selection
         
         # Define available tools for the model
         self.tools = [
@@ -74,13 +75,61 @@ class VibebusChat:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_stops_by_name",
+                    "description": "Search for bus stops by name. Returns matching stops with their IDs, names, codes, and coordinates.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "The name or partial name of the bus stop to search for (e.g., 'hertton', 'kamppi', 'rautatientori')"
+                            }
+                        },
+                        "required": ["name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_stop_id_from_selection",
+                    "description": "Get the gtfsId for a bus stop based on user's numeric selection from a previous stop search. Use this when user responds with a number (like '1', '2', etc.) after being shown stop options.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "selection": {
+                                "type": "string",
+                                "description": "The user's numeric selection (e.g., '1', '2', '3')"
+                            }
+                        },
+                        "required": ["selection"]
+                    }
+                }
             }
         ]
         
         # Add system message with tool information
+        system_msg = """
+        You are a helpful assistant for Helsinki with access to local information. You can help users with weather, bus departures, current time, and finding bus stops.
+
+        For bus departure requests:
+        1. If user asks for departures from a location name (not a specific stop ID), use get_stops_by_name to find matching stops
+        2. If multiple stops are found, the formatted response will show a numbered list - ask user to choose
+        3. If user responds with just a number (like "1", "2", etc.) after being shown stop options, use get_stop_id_from_selection to get the gtfsId
+        4. Then use get_next_departures with that gtfsId
+        5. If user doesn't specify any location, use get_next_departures without parameters (default stop)
+
+        For other requests, use the appropriate functions directly.
+
+        Always provide helpful, accurate information. Don't make things up!
+        """
         self.conversation.append({
             "role": "system",
-            "content": "You are a helpful assistant for Helsinki with access to local information. You can help users with weather, bus departures, and current time. Use the available functions when appropriate to provide accurate, real-time information."
+            "content": system_msg
         })
         
     def get_weather(self) -> dict:
@@ -173,6 +222,49 @@ class VibebusChat:
             }
         except Exception as e:
             return {"error": f"Time error: {str(e)}"}
+    
+    def get_stops_by_name(self, name: str) -> dict:
+        """Get bus stops by name using GraphQL API"""
+        url = "https://api.digitransit.fi/routing/v2/hsl/gtfs/v1"
+        
+        # Get API key from environment
+        api_key = os.getenv("DIGITRANSIT_API_KEY")
+        if not api_key:
+            return {"error": "DIGITRANSIT_API_KEY not found in environment variables"}
+        
+        # GraphQL query to search stops by name
+        query = """
+        query GetStopsByName($name: String!) {
+            stops(name: $name) {
+                gtfsId
+                name
+                code
+                lat
+                lon
+            }
+        }
+        """
+        
+        variables = {
+            "name": name
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "digitransit-subscription-key": api_key
+        }
+        
+        try:
+            response = requests.post(
+                url,
+                json={"query": query, "variables": variables},
+                headers=headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Stops API error: {str(e)}"}
     
     def format_weather_response(self, weather_data: dict) -> str:
         """Format weather data into a readable response"""
@@ -280,6 +372,65 @@ class VibebusChat:
         except (KeyError, TypeError, AttributeError) as e:
             return f"Sorry, I couldn't parse the time data properly: {str(e)}"
     
+    def format_stops_response(self, stops_data: dict, search_name: str) -> str:
+        """Format stops search data into a readable response"""
+        if "error" in stops_data:
+            return f"Sorry, I couldn't search for stops: {stops_data['error']}"
+        
+        try:
+            data = stops_data.get('data', {})
+            stops = data.get('stops', [])
+            
+            if not stops:
+                return f"🚏 No stops found matching '{search_name}'"
+            
+            # Store search results for potential selection
+            self.last_stop_search_results = stops
+            
+            # Format as numbered list for selection when used for departure queries
+            if len(stops) > 1:
+                response = f"🚏 Found {len(stops)} stops matching '{search_name}'. Which one do you mean?\n\n"
+                for i, stop in enumerate(stops, 1):
+                    name = stop.get('name', 'Unknown')
+                    code = stop.get('code', 'N/A')
+                    gtfs_id = stop.get('gtfsId', 'N/A')
+                    response += f"{i}. {name} {code} (ID: {gtfs_id})\n"
+                return response.strip()
+            else:
+                # Single result - show detailed info
+                stop = stops[0]
+                name = stop.get('name', 'Unknown')
+                gtfs_id = stop.get('gtfsId', 'N/A')
+                code = stop.get('code', 'N/A')
+                lat = stop.get('lat', 'N/A')
+                lon = stop.get('lon', 'N/A')
+                
+                response = f"🚏 Found: {name}\n"
+                response += f"ID: {gtfs_id}\n"
+                response += f"Code: {code}\n"
+                response += f"Location: {lat}, {lon}"
+                
+                return response
+            
+        except (KeyError, IndexError, TypeError) as e:
+            return f"Sorry, I couldn't parse the stops data properly: {str(e)}"
+    
+    def get_stop_id_from_selection(self, selection: str) -> str:
+        """Get gtfsId from user's numeric selection"""
+        try:
+            # Try to parse the selection as a number
+            selection_num = int(selection.strip())
+            
+            # Check if we have stored search results and the selection is valid
+            if (self.last_stop_search_results and 
+                1 <= selection_num <= len(self.last_stop_search_results)):
+                selected_stop = self.last_stop_search_results[selection_num - 1]
+                return selected_stop.get('gtfsId', '')
+            else:
+                return ''
+        except (ValueError, IndexError):
+            return ''
+    
     def _trim_conversation(self):
         """Trim conversation to max length, preserving system message"""
         if len(self.conversation) <= self.conversationMaxLength:
@@ -327,22 +478,36 @@ class VibebusChat:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
                     
-                    # Execute the appropriate function
+                    # Execute the appropriate function and format the result
                     if function_name == "get_weather":
-                        function_result = self.get_weather()
+                        raw_result = self.get_weather()
+                        formatted_result = self.format_weather_response(raw_result)
                     elif function_name == "get_next_departures":
                         stop_id = function_args.get("stop_id")
-                        function_result = self.get_next_departures(stop_id)
+                        raw_result = self.get_next_departures(stop_id)
+                        formatted_result = self.format_bus_response(raw_result, stop_id or "HSL:1434183")
                     elif function_name == "get_current_time":
-                        function_result = self.get_current_time()
+                        raw_result = self.get_current_time()
+                        formatted_result = self.format_time_response(raw_result)
+                    elif function_name == "get_stops_by_name":
+                        search_name = function_args.get("name", "")
+                        raw_result = self.get_stops_by_name(search_name)
+                        formatted_result = self.format_stops_response(raw_result, search_name)
+                    elif function_name == "get_stop_id_from_selection":
+                        selection = function_args.get("selection", "")
+                        stop_id = self.get_stop_id_from_selection(selection)
+                        if stop_id:
+                            formatted_result = f"Selected stop ID: {stop_id}"
+                        else:
+                            formatted_result = "Invalid selection or no previous search results available."
                     else:
-                        function_result = {"error": f"Unknown function: {function_name}"}
+                        formatted_result = f"Unknown function: {function_name}"
                     
-                    # Add tool result to conversation
+                    # Add formatted tool result to conversation
                     self.conversation.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps(function_result)
+                        "content": formatted_result
                     })
                 
                 # Get final completion with tool results

@@ -61,11 +61,11 @@ class TestVibebusChat(unittest.TestCase):
     
     def test_tools_configuration(self):
         """Test that tools are properly configured"""
-        self.assertEqual(len(self.chat.tools), 3)
+        self.assertEqual(len(self.chat.tools), 5)
         
         # Check tool names
         tool_names = [tool['function']['name'] for tool in self.chat.tools]
-        expected_names = ['get_weather', 'get_next_departures', 'get_current_time']
+        expected_names = ['get_weather', 'get_next_departures', 'get_current_time', 'get_stops_by_name', 'get_stop_id_from_selection']
         
         for name in expected_names:
             self.assertIn(name, tool_names)
@@ -273,6 +273,176 @@ class TestVibebusChat(unittest.TestCase):
         
         result = self.chat.format_bus_response(bus_data, "HSL:1234")
         self.assertEqual(result, expected_response)
+    
+    def test_get_stops_by_name_missing_api_key(self):
+        """Test get_stops_by_name without API key"""
+        with patch.dict('os.environ', {}, clear=True):
+            with patch.dict('os.environ', {'OPENROUTER_API_KEY': 'test_key'}):
+                result = self.chat.get_stops_by_name("hertton")
+                
+                # Should return error about missing API key
+                self.assertIn('error', result)
+                self.assertIn('DIGITRANSIT_API_KEY not found', result['error'])
+    
+    def test_get_stops_by_name_success(self):
+        """Test get_stops_by_name with successful API response"""
+        # Mock the API call to avoid actual network request
+        with patch('requests.post') as mock_post:
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "data": {
+                    "stops": [
+                        {
+                            "gtfsId": "HSL:1234567",
+                            "name": "Herttonemi",
+                            "code": "H1234",
+                            "lat": 60.1850,
+                            "lon": 25.0317
+                        }
+                    ]
+                }
+            }
+            mock_response.raise_for_status = MagicMock()
+            mock_post.return_value = mock_response
+            
+            with patch.dict('os.environ', {'DIGITRANSIT_API_KEY': 'test_key'}):
+                result = self.chat.get_stops_by_name("hertton")
+                
+                # Should not return error
+                self.assertNotIn('error', result)
+                self.assertIn('data', result)
+                self.assertIn('stops', result['data'])
+    
+    def test_format_stops_response_success(self):
+        """Test format_stops_response with valid stops data"""
+        stops_data = {
+            'data': {
+                'stops': [
+                    {
+                        'gtfsId': 'HSL:1234567',
+                        'name': 'Herttonemi',
+                        'code': 'H1234',
+                        'lat': 60.1850,
+                        'lon': 25.0317
+                    },
+                    {
+                        'gtfsId': 'HSL:7654321',
+                        'name': 'Herttonemi asema',
+                        'code': 'H5678',
+                        'lat': 60.1860,
+                        'lon': 25.0327
+                    }
+                ]
+            }
+        }
+        
+        result = self.chat.format_stops_response(stops_data, "hertton")
+        
+        self.assertIn("🚏 Found 2 stops matching 'hertton'. Which one do you mean?", result)
+        self.assertIn("1. Herttonemi H1234 (ID: HSL:1234567)", result)
+        self.assertIn("2. Herttonemi asema H5678 (ID: HSL:7654321)", result)
+    
+    def test_format_stops_response_with_error(self):
+        """Test format_stops_response when error is present in data"""
+        stops_data = {"error": "Stops API error: Connection failed"}
+        
+        expected_response = "Sorry, I couldn't search for stops: Stops API error: Connection failed"
+        
+        result = self.chat.format_stops_response(stops_data, "hertton")
+        self.assertEqual(result, expected_response)
+    
+    def test_format_stops_response_no_results(self):
+        """Test format_stops_response when no stops are found"""
+        stops_data = {
+            'data': {
+                'stops': []
+            }
+        }
+        
+        expected_response = "🚏 No stops found matching 'nonexistent'"
+        
+        result = self.chat.format_stops_response(stops_data, "nonexistent")
+        self.assertEqual(result, expected_response)
+    
+    def test_format_stops_response_single_result(self):
+        """Test format_stops_response when only one stop is found"""
+        stops_data = {
+            'data': {
+                'stops': [
+                    {
+                        'gtfsId': 'HSL:1234567',
+                        'name': 'Herttonemi',
+                        'code': 'H1234',
+                        'lat': 60.1850,
+                        'lon': 25.0317
+                    }
+                ]
+            }
+        }
+        
+        result = self.chat.format_stops_response(stops_data, "hertton")
+        
+        self.assertIn("🚏 Found: Herttonemi", result)
+        self.assertIn("ID: HSL:1234567", result)
+        self.assertIn("Code: H1234", result)
+        self.assertIn("Location: 60.185, 25.0317", result)
+    
+    def test_get_stop_id_from_selection_valid(self):
+        """Test get_stop_id_from_selection with valid selection"""
+        # First populate the search results
+        self.chat.last_stop_search_results = [
+            {'gtfsId': 'HSL:1234567', 'name': 'Stop A'},
+            {'gtfsId': 'HSL:7654321', 'name': 'Stop B'},
+            {'gtfsId': 'HSL:9999999', 'name': 'Stop C'}
+        ]
+        
+        # Test valid selections
+        self.assertEqual(self.chat.get_stop_id_from_selection("1"), "HSL:1234567")
+        self.assertEqual(self.chat.get_stop_id_from_selection("2"), "HSL:7654321")
+        self.assertEqual(self.chat.get_stop_id_from_selection("3"), "HSL:9999999")
+        self.assertEqual(self.chat.get_stop_id_from_selection(" 2 "), "HSL:7654321")  # With spaces
+    
+    def test_get_stop_id_from_selection_invalid(self):
+        """Test get_stop_id_from_selection with invalid selections"""
+        # First populate the search results
+        self.chat.last_stop_search_results = [
+            {'gtfsId': 'HSL:1234567', 'name': 'Stop A'},
+            {'gtfsId': 'HSL:7654321', 'name': 'Stop B'}
+        ]
+        
+        # Test invalid selections
+        self.assertEqual(self.chat.get_stop_id_from_selection("0"), "")  # Below range
+        self.assertEqual(self.chat.get_stop_id_from_selection("3"), "")  # Above range
+        self.assertEqual(self.chat.get_stop_id_from_selection("abc"), "")  # Non-numeric
+        self.assertEqual(self.chat.get_stop_id_from_selection(""), "")  # Empty
+    
+    def test_get_stop_id_from_selection_no_results(self):
+        """Test get_stop_id_from_selection when no previous search results"""
+        self.chat.last_stop_search_results = []
+        self.assertEqual(self.chat.get_stop_id_from_selection("1"), "")
+    
+    def test_format_stops_response_stores_results(self):
+        """Test that format_stops_response stores results in last_stop_search_results"""
+        stops_data = {
+            'data': {
+                'stops': [
+                    {
+                        'gtfsId': 'HSL:1234567',
+                        'name': 'Herttonemi',
+                        'code': 'H1234',
+                        'lat': 60.1850,
+                        'lon': 25.0317
+                    }
+                ]
+            }
+        }
+        
+        self.chat.format_stops_response(stops_data, "hertton")
+        
+        # Check that results were stored
+        self.assertEqual(len(self.chat.last_stop_search_results), 1)
+        self.assertEqual(self.chat.last_stop_search_results[0]['gtfsId'], 'HSL:1234567')
+        self.assertEqual(self.chat.last_stop_search_results[0]['name'], 'Herttonemi')
 
 
 if __name__ == '__main__':
