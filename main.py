@@ -92,23 +92,6 @@ class VibebusChat:
                         "required": ["name"]
                     }
                 }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_stop_id_from_selection",
-                    "description": "Get the gtfsId for a bus stop based on user's numeric selection from a previous stop search. Use this when user responds with a number (like '1', '2', etc.) after being shown stop options.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "selection": {
-                                "type": "string",
-                                "description": "The user's numeric selection (e.g., '1', '2', '3')"
-                            }
-                        },
-                        "required": ["selection"]
-                    }
-                }
             }
         ]
         
@@ -117,11 +100,10 @@ class VibebusChat:
         You are a helpful assistant for Helsinki with access to local information. You can help users with weather, bus departures, current time, and finding bus stops.
 
         For bus departure requests:
-        1. If user asks for departures from a location name (not a specific stop ID), use get_stops_by_name to find matching stops
-        2. If multiple stops are found, the formatted response will show a numbered list - ask user to choose
-        3. If user responds with just a number (like "1", "2", etc.) after being shown stop options, use get_stop_id_from_selection to get the gtfsId
-        4. Then use get_next_departures with that gtfsId
-        5. If user doesn't specify any location, use get_next_departures without parameters (default stop)
+        1. If user asks for departures from a location, use get_stops_by_name to find matching stops
+        2. If multiple stops are found, the formatted response will show a numbered list - ask user to choose a number
+        3. When user responds with a number, the system will automatically handle the selection and show departures
+        4. If user doesn't specify any location, use get_next_departures without parameters (default stop)
 
         For other requests, use the appropriate functions directly.
 
@@ -447,6 +429,30 @@ class VibebusChat:
     
     def send_message(self, message: str) -> str:
         """Send a message to the LLM and return the response"""
+        # Check if this is a numeric selection after a stop search
+        if (self.last_stop_search_results and 
+            message.strip().isdigit() and 
+            1 <= int(message.strip()) <= len(self.last_stop_search_results)):
+            
+            # Handle stop selection directly without model call
+            stop_id = self.get_stop_id_from_selection(message.strip())
+            if stop_id:
+                # Get departures for the selected stop
+                raw_result = self.get_next_departures(stop_id)
+                formatted_result = self.format_bus_response(raw_result, stop_id)
+                
+                # Add user message and assistant response to conversation
+                self.conversation.append({"role": "user", "content": message})
+                self.conversation.append({"role": "assistant", "content": formatted_result})
+                
+                # Clear the search results since selection was made
+                self.last_stop_search_results = []
+                
+                # Trim conversation if it exceeds max length
+                self._trim_conversation()
+                
+                return formatted_result
+        
         # Add user message to conversation history
         self.conversation.append({"role": "user", "content": message})
         
@@ -493,13 +499,6 @@ class VibebusChat:
                         search_name = function_args.get("name", "")
                         raw_result = self.get_stops_by_name(search_name)
                         formatted_result = self.format_stops_response(raw_result, search_name)
-                    elif function_name == "get_stop_id_from_selection":
-                        selection = function_args.get("selection", "")
-                        stop_id = self.get_stop_id_from_selection(selection)
-                        if stop_id:
-                            formatted_result = f"Selected stop ID: {stop_id}"
-                        else:
-                            formatted_result = "Invalid selection or no previous search results available."
                     else:
                         formatted_result = f"Unknown function: {function_name}"
                     

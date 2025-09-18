@@ -61,11 +61,11 @@ class TestVibebusChat(unittest.TestCase):
     
     def test_tools_configuration(self):
         """Test that tools are properly configured"""
-        self.assertEqual(len(self.chat.tools), 5)
+        self.assertEqual(len(self.chat.tools), 4)
         
         # Check tool names
         tool_names = [tool['function']['name'] for tool in self.chat.tools]
-        expected_names = ['get_weather', 'get_next_departures', 'get_current_time', 'get_stops_by_name', 'get_stop_id_from_selection']
+        expected_names = ['get_weather', 'get_next_departures', 'get_current_time', 'get_stops_by_name']
         
         for name in expected_names:
             self.assertIn(name, tool_names)
